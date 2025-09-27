@@ -60,28 +60,32 @@ jobs:
         run: |
           aws ecs wait services-stable --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" --region "$AWS_REGION"
 
-      - name: Resolve networking (subnets & SG)
+      - name: Resolve networking from ECS Service
         id: net
         run: |
-          VPC_ID=$(aws ecs describe-clusters --clusters "$ECS_CLUSTER" --region "$AWS_REGION" \
-                    --query 'clusters[0].attachments[0].details[?name==`vpc-id`].value' --output text)
-          SUBNETS=$(aws ec2 describe-subnets --filters Name=vpc-id,Values=$VPC_ID --region "$AWS_REGION" \
-                    --query 'Subnets[].SubnetId' --output text)
-          SG_ID=$(aws ec2 describe-security-groups --filters Name=group-name,Values=ecs-cloud-portfolio-sg Name=vpc-id,Values=$VPC_ID \
-                    --region "$AWS_REGION" --query 'SecurityGroups[0].GroupId' --output text)
+          SUBNETS_JSON=$(aws ecs describe-services \
+            --cluster "$ECS_CLUSTER" \
+            --services "$ECS_SERVICE" \
+            --region "$AWS_REGION" \
+            --query 'services[0].networkConfiguration.awsvpcConfiguration.subnets' \
+            --output json)
 
-          echo "subnets=$SUBNETS" >> $GITHUB_OUTPUT
-          echo "sg=$SG_ID" >> $GITHUB_OUTPUT
+          SG_JSON=$(aws ecs describe-services \
+            --cluster "$ECS_CLUSTER" \
+            --services "$ECS_SERVICE" \
+            --region "$AWS_REGION" \
+            --query 'services[0].networkConfiguration.awsvpcConfiguration.securityGroups' \
+            --output json)
+
+          echo "subnets=$SUBNETS_JSON" >> $GITHUB_OUTPUT
+          echo "sg=$SG_JSON" >> $GITHUB_OUTPUT
 
       - name: Run DB migrations in ECS (one-off task)
         run: |
-          SUBNETS_JSON=$(echo "${{ steps.net.outputs.subnets }}" | awk '{printf "[\"%s\"", $1; for(i=2;i<=NF;i++) printf ",\"%s\"", $i; print "]"}')
-          SG_JSON="[\"${{ steps.net.outputs.sg }}\"]"
-
           aws ecs run-task \
             --cluster "$ECS_CLUSTER" \
             --launch-type FARGATE \
-            --network-configuration "awsvpcConfiguration={subnets=$SUBNETS_JSON,securityGroups=$SG_JSON,assignPublicIp=ENABLED}" \
+            --network-configuration "awsvpcConfiguration={subnets=${{ steps.net.outputs.subnets }},securityGroups=${{ steps.net.outputs.sg }},assignPublicIp=ENABLED}" \
             --task-definition "$ECS_TASK_FAMILY" \
             --overrides "{\"containerOverrides\":[{\"name\":\"$ECS_CONTAINER_NAME\",\"command\":[\"php\",\"artisan\",\"migrate\",\"--force\"]}]}" \
             --region "$AWS_REGION"
