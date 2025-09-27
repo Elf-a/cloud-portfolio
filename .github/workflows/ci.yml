@@ -1,0 +1,108 @@
+name: CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  laravel-tests:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: laravel
+          POSTGRES_PASSWORD: laravel
+          POSTGRES_DB: laravel
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U laravel -d laravel"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: mbstring, pdo, pdo_pgsql, bcmath
+          coverage: none
+
+      - name: Cache composer dependencies
+        uses: actions/cache@v3
+        with:
+          path: vendor
+          key: ${{ runner.os }}-php-${{ hashFiles('**/composer.lock') }}
+          restore-keys: ${{ runner.os }}-php-
+
+      - name: Install dependencies
+        run: composer install --no-interaction --prefer-dist --no-progress
+        working-directory: ./app
+
+      - name: Set up environment
+        run: cp .env.example .env
+        working-directory: ./app
+
+      - name: Generate key
+        run: php artisan key:generate
+        working-directory: ./app
+
+      - name: Run migrations
+        run: php artisan migrate --force
+        working-directory: ./app
+        env:
+          DB_CONNECTION: pgsql
+          DB_HOST: 127.0.0.1
+          DB_PORT: 5432
+          DB_DATABASE: laravel
+          DB_USERNAME: laravel
+          DB_PASSWORD: laravel
+          REDIS_HOST: 127.0.0.1
+          REDIS_PORT: 6379
+
+      - name: Run tests
+        run: php artisan test --parallel
+        working-directory: ./app
+        env:
+          DB_CONNECTION: pgsql
+          DB_HOST: 127.0.0.1
+          DB_PORT: 5432
+          DB_DATABASE: laravel
+          DB_USERNAME: laravel
+          DB_PASSWORD: laravel
+          REDIS_HOST: 127.0.0.1
+          REDIS_PORT: 6379
+
+  docker-build:
+    name: Docker build (PHP-FPM image)
+    runs-on: ubuntu-latest
+    needs: laravel-tests
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image (no push)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./docker/app/Dockerfile
+          push: false
+          tags: demo/cloud-portfolio:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
