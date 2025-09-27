@@ -16,7 +16,7 @@ jobs:
         env:
           POSTGRES_USER: laravel
           POSTGRES_PASSWORD: laravel
-          POSTGRES_DB: laravel
+          POSTGRES_DB: laraveldemo
         ports:
           - 5432:5432
         options: >-
@@ -81,7 +81,7 @@ jobs:
           DB_PORT: 5432
           DB_DATABASE: laravel
           DB_USERNAME: laravel
-          DB_PASSWORD: laravel
+          DB_PASSWORD: laraveldemo
           REDIS_HOST: 127.0.0.1
           REDIS_PORT: 6379
 

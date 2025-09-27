@@ -52,3 +52,16 @@ jobs:
             --service "$ECS_SERVICE" \
             --force-new-deployment \
             --region "$AWS_REGION"
+            
+      - name: Run DB migrations in ECS
+        run: |
+          SUBNETS=$(aws ec2 describe-subnets --filters Name=default-for-az,Values=true --region "$AWS_REGION" --query 'Subnets[].SubnetId' --output text)
+          SG_ID=$(aws ec2 describe-security-groups --filters Name=group-name,Values=ecs-cloud-portfolio-sg --region "$AWS_REGION" --query 'SecurityGroups[0].GroupId' --output text)
+
+          aws ecs run-task \
+            --cluster "$ECS_CLUSTER" \
+            --launch-type FARGATE \
+            --network-configuration "awsvpcConfiguration={subnets=[$SUBNETS],securityGroups=[$SG_ID],assignPublicIp=ENABLED}" \
+            --task-definition "$ECS_SERVICE" \
+            --overrides "{\"containerOverrides\":[{\"name\":\"webapp\",\"command\":[\"php\",\"artisan\",\"migrate\",\"--force\"]}]}" \
+            --region "$AWS_REGION"
