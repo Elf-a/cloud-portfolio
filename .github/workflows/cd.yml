@@ -2,7 +2,7 @@ name: CD
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   workflow_dispatch:
 
 concurrency:
@@ -15,9 +15,11 @@ jobs:
     env:
       AWS_REGION: ${{ secrets.AWS_REGION }}
       AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
-      ECR_REPO: ${{ secrets.ECR_REPO }}          # cloud-portfolio
-      ECS_CLUSTER: ${{ secrets.ECS_CLUSTER }}    # cloud-portfolio
-      ECS_SERVICE: ${{ secrets.ECS_SERVICE }}    # cloud-portfolio
+      ECR_REPO: ${{ secrets.ECR_REPO }}
+      ECS_CLUSTER: ${{ secrets.ECS_CLUSTER }}
+      ECS_SERVICE: ${{ secrets.ECS_SERVICE }}
+      ECS_TASK_FAMILY: cloud-portfolio        
+      ECS_CONTAINER_NAME: webapp             
       IMAGE_TAG: sha-${{ github.sha }}
       ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
 
@@ -34,7 +36,7 @@ jobs:
       - name: Login to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build Docker image (from docker/app/Dockerfile)
+      - name: Build Docker image
         run: |
           docker build -f docker/app/Dockerfile -t $ECR_REPO:latest -t $ECR_REPO:$IMAGE_TAG .
 
@@ -52,16 +54,33 @@ jobs:
             --service "$ECS_SERVICE" \
             --force-new-deployment \
             --region "$AWS_REGION"
-            
-      - name: Run DB migrations in ECS
+
+      - name: Wait for service to stabilize
         run: |
-          SUBNETS=$(aws ec2 describe-subnets --filters Name=default-for-az,Values=true --region "$AWS_REGION" --query 'Subnets[].SubnetId' --output text)
-          SG_ID=$(aws ec2 describe-security-groups --filters Name=group-name,Values=ecs-cloud-portfolio-sg --region "$AWS_REGION" --query 'SecurityGroups[0].GroupId' --output text)
+          aws ecs wait services-stable --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" --region "$AWS_REGION"
+
+      - name: Resolve networking (subnets & SG)
+        id: net
+        run: |
+          VPC_ID=$(aws ecs describe-clusters --clusters "$ECS_CLUSTER" --region "$AWS_REGION" \
+                    --query 'clusters[0].attachments[0].details[?name==`vpc-id`].value' --output text)
+          SUBNETS=$(aws ec2 describe-subnets --filters Name=vpc-id,Values=$VPC_ID --region "$AWS_REGION" \
+                    --query 'Subnets[].SubnetId' --output text)
+          SG_ID=$(aws ec2 describe-security-groups --filters Name=group-name,Values=ecs-cloud-portfolio-sg Name=vpc-id,Values=$VPC_ID \
+                    --region "$AWS_REGION" --query 'SecurityGroups[0].GroupId' --output text)
+
+          echo "subnets=$SUBNETS" >> $GITHUB_OUTPUT
+          echo "sg=$SG_ID" >> $GITHUB_OUTPUT
+
+      - name: Run DB migrations in ECS (one-off task)
+        run: |
+          SUBNETS_JSON=$(echo "${{ steps.net.outputs.subnets }}" | awk '{printf "[\"%s\"", $1; for(i=2;i<=NF;i++) printf ",\"%s\"", $i; print "]"}')
+          SG_JSON="[\"${{ steps.net.outputs.sg }}\"]"
 
           aws ecs run-task \
             --cluster "$ECS_CLUSTER" \
             --launch-type FARGATE \
-            --network-configuration "awsvpcConfiguration={subnets=[$SUBNETS],securityGroups=[$SG_ID],assignPublicIp=ENABLED}" \
-            --task-definition "$ECS_SERVICE" \
-            --overrides "{\"containerOverrides\":[{\"name\":\"webapp\",\"command\":[\"php\",\"artisan\",\"migrate\",\"--force\"]}]}" \
+            --network-configuration "awsvpcConfiguration={subnets=$SUBNETS_JSON,securityGroups=$SG_JSON,assignPublicIp=ENABLED}" \
+            --task-definition "$ECS_TASK_FAMILY" \
+            --overrides "{\"containerOverrides\":[{\"name\":\"$ECS_CONTAINER_NAME\",\"command\":[\"php\",\"artisan\",\"migrate\",\"--force\"]}]}" \
             --region "$AWS_REGION"
