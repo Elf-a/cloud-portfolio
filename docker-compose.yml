@@ -1,0 +1,40 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: ./docker/app/Dockerfile
+    volumes:
+      - ./app:/var/www/html
+    networks: [webnet]
+
+  web:
+    image: nginx:alpine
+    ports:
+      - "8080:80"
+    volumes:
+      - ../app:/var/www/html
+      - ./docker/nginx:/etc/nginx/conf.d:ro
+    depends_on: [app]
+    networks: [webnet]
+
+
+
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: laravel
+      POSTGRES_PASSWORD: laravel
+      POSTGRES_DB: laravel
+    volumes:
+      - dbdata:/var/lib/postgresql/data
+    networks: [webnet]
+
+  cache:
+    image: redis:7
+    networks: [webnet]
+
+networks:
+  webnet:
+
+volumes:
+  dbdata:
