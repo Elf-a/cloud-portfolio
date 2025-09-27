@@ -63,22 +63,22 @@ jobs:
       - name: Resolve networking from ECS Service
         id: net
         run: |
+          # вземи субнетите/SG на сервиса и ги компресирай до едноредов JSON
           SUBNETS_JSON=$(aws ecs describe-services \
             --cluster "$ECS_CLUSTER" \
             --services "$ECS_SERVICE" \
             --region "$AWS_REGION" \
             --query 'services[0].networkConfiguration.awsvpcConfiguration.subnets' \
-            --output json)
-
+            --output json | jq -c '.')
           SG_JSON=$(aws ecs describe-services \
             --cluster "$ECS_CLUSTER" \
             --services "$ECS_SERVICE" \
             --region "$AWS_REGION" \
             --query 'services[0].networkConfiguration.awsvpcConfiguration.securityGroups' \
-            --output json)
+            --output json | jq -c '.')
 
-          echo "subnets=$SUBNETS_JSON" >> $GITHUB_OUTPUT
-          echo "sg=$SG_JSON" >> $GITHUB_OUTPUT
+          echo "subnets=$SUBNETS_JSON" >> "$GITHUB_OUTPUT"
+          echo "sg=$SG_JSON" >> "$GITHUB_OUTPUT"
 
       - name: Run DB migrations in ECS (one-off task)
         run: |
